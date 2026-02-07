@@ -1,12 +1,13 @@
 package framework
 
 import (
-	"os"
 	"encoding/json"
+	"fmt"
+	"os"
 	"path/filepath"
 )
 
-type Config struct {
+type ModuleConfig struct {
 	ModuleID  string
 	BusSocket string
 	StateDir  string
@@ -19,14 +20,11 @@ func LoadConfig() ModuleConfig {
 	moduleID := getEnv("MODULE_ID", "template-module")
 	logLevel := getEnv("LOG_LEVEL", "INFO")
 
-	fmt.Printf("[Config] BUS_SOCKET=%s STATE_DIR=%s MODULE_ID=%s\n", busSocket, stateDir, moduleID)
-
 	return ModuleConfig{
-	return Config{
-		ModuleID:  getEnv("MODULE_ID", "unknown"),
-		BusSocket: getEnv("BUS_SOCKET", "/tmp/bus.sock"),
-		StateDir:  getEnv("STATE_DIR", "./state"),
-		LogLevel:  getEnv("LOG_LEVEL", "INFO"),
+		ModuleID:  moduleID,
+		BusSocket: busSocket,
+		StateDir:  stateDir,
+		LogLevel:  logLevel,
 	}
 }
 
@@ -53,4 +51,8 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func (c ModuleConfig) Info() string {
+	return fmt.Sprintf("ID=%s, Bus=%s, State=%s", c.ModuleID, c.BusSocket, c.StateDir)
 }

@@ -21,6 +21,12 @@ func main() {
 	// Ensure state dir exists
 	os.MkdirAll(cfg.StateDir, 0755)
 
+	// Mirror logs to status.log
+	logCloser, err := framework.SetupLogger(cfg.StateDir)
+	if err == nil {
+		defer logCloser.Close()
+	}
+
 	// Initialize Database
 	db, err := framework.ConnectDB(cfg.StateDir)
 	if err != nil {
@@ -52,6 +58,11 @@ func main() {
 		im:        im,
 		ctx:       ctx,
 		config:    modCfg,
+	}
+
+	// Run Starlark Setup if it exists
+	if err := framework.RunSetup(cfg.StateDir, api); err != nil {
+		log.Printf("Setup Error: %v", err)
 	}
 
 	// Start the developer's logic
@@ -156,4 +167,11 @@ func (w *moduleAPIWrapper) ExecInstance(id string, funcName string, args ...any)
 
 func (w *moduleAPIWrapper) Context() context.Context {
 	return w.ctx
+}
+
+func (w *moduleAPIWrapper) Set(key string, value any) {
+	if w.config == nil {
+		w.config = make(map[string]any)
+	}
+	w.config[key] = value
 }
