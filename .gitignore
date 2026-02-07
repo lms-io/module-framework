@@ -1,0 +1,28 @@
+# Build artifacts
+bin/
+adapter-bin
+*-bin
+
+# OS files
+.DS_Store
+
+# Sockets and Logs
+*.sock
+*.log
+
+# Databases and State
+*.db
+*.db-journal
+*.state.json
+instances/
+
+# Environment files
+.env
+.env.*
+
+# Ignore all private tests
+private_tests/*
+
+# EXCEPT for the example template
+!private_tests/example-hardware-test/
+!private_tests/example-hardware-test/**
