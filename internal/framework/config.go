@@ -13,7 +13,15 @@ type Config struct {
 	LogLevel  string
 }
 
-func LoadConfig() Config {
+func LoadConfig() ModuleConfig {
+	busSocket := getEnv("BUS_SOCKET", "bus.sock")
+	stateDir := getEnv("STATE_DIR", "state")
+	moduleID := getEnv("MODULE_ID", "template-module")
+	logLevel := getEnv("LOG_LEVEL", "INFO")
+
+	fmt.Printf("[Config] BUS_SOCKET=%s STATE_DIR=%s MODULE_ID=%s\n", busSocket, stateDir, moduleID)
+
+	return ModuleConfig{
 	return Config{
 		ModuleID:  getEnv("MODULE_ID", "unknown"),
 		BusSocket: getEnv("BUS_SOCKET", "/tmp/bus.sock"),
