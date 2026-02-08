@@ -48,53 +48,59 @@ func (im *InstanceManager) RegisterInstance(config map[string]any) (string, erro
 	instancesDir := filepath.Join(im.stateDir, "instances")
 	os.MkdirAll(instancesDir, 0755)
 
-	// Extract controls if present to keep config clean
+	// 1. Determine ID
+	var hexID string
+	if id, ok := config["id"].(string); ok && id != "" {
+		// Use the stable ID provided by the bundle
+		hexID = id
+		delete(config, "id")
+	} else {
+		// Auto-generate next hex ID
+		files, _ := os.ReadDir(instancesDir)
+		maxID := -1
+		for _, f := range files {
+			if filepath.Ext(f.Name()) == ".star" {
+				name := strings.TrimSuffix(f.Name(), ".star")
+				idx := strings.LastIndex(name, "-")
+				if idx != -1 {
+					hexPart := name[idx+1:]
+					var id int
+					_, err := fmt.Sscanf(hexPart, "%X", &id)
+					if err == nil && id > maxID {
+						maxID = id
+					}
+				}
+			}
+		}
+		hexID = fmt.Sprintf("%s-%04X", im.moduleID, maxID + 1)
+	}
+
+	// 2. Extract controls
 	var controls any
 	if c, ok := config["controls"]; ok {
 		controls = c
 		delete(config, "controls")
 	}
 
-	// 1. Find the next hex ID
-	files, _ := os.ReadDir(instancesDir)
-	maxID := -1
-	for _, f := range files {
-		if filepath.Ext(f.Name()) == ".star" {
-			name := strings.TrimSuffix(f.Name(), ".star")
-			idx := strings.LastIndex(name, "-")
-			if idx != -1 {
-				hexPart := name[idx+1:]
-				var id int
-				_, err := fmt.Sscanf(hexPart, "%X", &id)
-				if err == nil && id > maxID {
-					maxID = id
-				}
-			}
-		}
-	}
-
-	nextID := maxID + 1
-	hexID := fmt.Sprintf("%s-%04X", im.moduleID, nextID)
-	
-	// 2. Generate Starlark file
+	// 3. Generate Starlark file
 	content := fmt.Sprintf("# USER LOGIC FILE\nid = %q\nenabled = True\n", hexID)
 	if controls != nil {
-		// Serialize controls to Starlark dict
-		if cMap, ok := controls.(map[string]ControlSpec); ok {
-			// Convert struct to map for formatting
-			// Quick hack: marshal to json then to map to reuse formatStarlarkDict
-			b, _ := json.Marshal(cMap)
-			var m map[string]any
-			json.Unmarshal(b, &m)
-			content += fmt.Sprintf("controls = %s\n", im.formatStarlarkDict(m))
-		} else if cMap, ok := controls.(map[string]any); ok {
-			content += fmt.Sprintf("controls = %s\n", im.formatStarlarkDict(cMap))
-		}
+		b, _ := json.Marshal(controls)
+		var m map[string]any
+		json.Unmarshal(b, &m)
+		content += fmt.Sprintf("controls = %s\n", im.formatStarlarkDict(m))
 	}
 	content += fmt.Sprintf("config = %s\n", im.formatStarlarkDict(config))
 	
 	filePath := filepath.Join(instancesDir, hexID+".star")
 	return hexID, os.WriteFile(filePath, []byte(content), 0644)
+}
+
+func (im *InstanceManager) DeleteInstance(id string) error {
+	instancesDir := filepath.Join(im.stateDir, "instances")
+	os.Remove(filepath.Join(instancesDir, id+".star"))
+	os.Remove(filepath.Join(instancesDir, id+".state.json"))
+	return nil
 }
 
 func (im *InstanceManager) UpdateState(id string, state map[string]any) error {
@@ -140,14 +146,12 @@ func (im *InstanceManager) GetInstances() ([]InstanceConfig, error) {
 }
 
 func (im *InstanceManager) loadStarlarkInstance(path string) (InstanceConfig, error) {
-	// 1. Load System Sidecar State if it exists
 	statePath := strings.TrimSuffix(path, ".star") + ".state.json"
 	stateData := make(map[string]any)
 	if data, err := os.ReadFile(statePath); err == nil {
 		json.Unmarshal(data, &stateData)
 	}
 
-	// 2. Setup Starlark environment with state injected as 'context'
 	thread := &starlark.Thread{Name: "instance-loader"}
 	predeclared := starlark.StringDict{
 		"context": im.mapToStarlarkDict(stateData),
@@ -169,7 +173,6 @@ func (im *InstanceManager) loadStarlarkInstance(path string) (InstanceConfig, er
 	}
 	if val, ok := globals["controls"]; ok {
 		if dict, ok := val.(*starlark.Dict); ok {
-			// Convert generic map to ControlSpec map
 			raw := im.starlarkToMap(dict)
 			cfg.Controls = make(map[string]ControlSpec)
 			b, _ := json.Marshal(raw)
@@ -219,7 +222,6 @@ func (im *InstanceManager) starlarkToMap(dict *starlark.Dict) map[string]any {
 
 func (im *InstanceManager) formatStarlarkDict(m map[string]any) string {
 	b, _ := json.MarshalIndent(m, "", "    ")
-	// JSON is mostly valid Starlark for simple dicts
 	s := string(b)
 	s = strings.ReplaceAll(s, "null", "None")
 	s = strings.ReplaceAll(s, "true", "True")
@@ -238,7 +240,6 @@ func (im *InstanceManager) ExecInstance(id string, funcName string, args ...any)
 
 	starArgs := make(starlark.Tuple, len(args))
 	for i, a := range args {
-		// Basic conversion
 		switch v := a.(type) {
 		case string: starArgs[i] = starlark.String(v)
 		case int:    starArgs[i] = starlark.MakeInt(v)

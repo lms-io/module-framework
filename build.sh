@@ -14,10 +14,18 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR/state/instances"
 
 # 2. Build Binary (requires CGO for SQLite)
-echo "Compiling..."
+echo "Compiling Go binary..."
 CGO_ENABLED=1 go build -o "$OUT_DIR/adapter" ./cmd/adapter/main.go
 
-# 3. Copy Metadata
+# 3. Build UI Bundle
+if [ -d "ui" ]; then
+    echo "Compiling UI bundle..."
+    cd ui && npm install && npm run build && cd ..
+    mkdir -p "$OUT_DIR/ui"
+    cp -r ui/dist/* "$OUT_DIR/ui/"
+fi
+
+# 4. Copy Metadata
 cp module.json "$OUT_DIR/bundle.json"
 
 echo "----------------------------------------"

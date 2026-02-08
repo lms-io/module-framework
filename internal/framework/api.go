@@ -26,6 +26,7 @@ type ModuleAPI interface {
 	GetInstances() []InstanceConfig
 	GetModuleConfig() map[string]any
 	RegisterInstance(config map[string]any) (string, error)
+	DeleteInstance(id string) error
 	UpdateState(id string, state map[string]any) error
 	ExecInstance(id string, functionName string, args ...any) (any, error)
 	
