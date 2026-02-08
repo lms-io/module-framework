@@ -11,12 +11,12 @@ import (
 )
 
 type ControlSpec struct {
-	Type    string   `json:"type"`              // switch, range, select, sensor
-	Min     float64  `json:"min,omitempty"`     // for range
-	Max     float64  `json:"max,omitempty"`     // for range
-	Step    float64  `json:"step,omitempty"`    // for range
-	Unit    string   `json:"unit,omitempty"`    // for range/sensor
-	Options []string `json:"options,omitempty"` // for select
+	Type    string   `json:"type"`
+	Min     float64  `json:"min,omitempty"`
+	Max     float64  `json:"max,omitempty"`
+	Step    float64  `json:"step,omitempty"`
+	Unit    string   `json:"unit,omitempty"`
+	Options []string `json:"options,omitempty"`
 	ReadOnly bool    `json:"read_only,omitempty"`
 }
 
@@ -44,18 +44,15 @@ func (im *InstanceManager) ModuleID() string {
 	return im.moduleID
 }
 
-func (im *InstanceManager) RegisterInstance(config map[string]any) (string, error) {
+func (im *InstanceManager) RegisterInstance(payload map[string]any) (string, error) {
 	instancesDir := filepath.Join(im.stateDir, "instances")
 	os.MkdirAll(instancesDir, 0755)
 
-	// 1. Determine ID
 	var hexID string
-	if id, ok := config["id"].(string); ok && id != "" {
-		// Use the stable ID provided by the bundle
+	if id, ok := payload["id"].(string); ok && id != "" {
 		hexID = id
-		delete(config, "id")
+		delete(payload, "id")
 	} else {
-		// Auto-generate next hex ID
 		files, _ := os.ReadDir(instancesDir)
 		maxID := -1
 		for _, f := range files {
@@ -63,10 +60,8 @@ func (im *InstanceManager) RegisterInstance(config map[string]any) (string, erro
 				name := strings.TrimSuffix(f.Name(), ".star")
 				idx := strings.LastIndex(name, "-")
 				if idx != -1 {
-					hexPart := name[idx+1:]
 					var id int
-					_, err := fmt.Sscanf(hexPart, "%X", &id)
-					if err == nil && id > maxID {
+					if _, err := fmt.Sscanf(name[idx+1:], "%X", &id); err == nil && id > maxID {
 						maxID = id
 					}
 				}
@@ -75,14 +70,24 @@ func (im *InstanceManager) RegisterInstance(config map[string]any) (string, erro
 		hexID = fmt.Sprintf("%s-%04X", im.moduleID, maxID + 1)
 	}
 
-	// 2. Extract controls
-	var controls any
-	if c, ok := config["controls"]; ok {
-		controls = c
-		delete(config, "controls")
+	config, _ := payload["config"].(map[string]any)
+	if config == nil { config = make(map[string]any) }
+	
+	if n, ok := payload["name"].(string); ok { config["name"] = n; delete(payload, "name") }
+	if a, ok := payload["address"].(string); ok { config["address"] = a; delete(payload, "address") }
+	if auto, ok := payload["is_auto"].(bool); ok { config["is_auto"] = auto; delete(payload, "is_auto") }
+
+	// Capture all remaining fields (including 'meta') into the config map
+	for k, v := range payload {
+		config[k] = v
 	}
 
-	// 3. Generate Starlark file
+	var controls any
+	if c, ok := payload["controls"]; ok {
+		controls = c
+		delete(payload, "controls")
+	}
+
 	content := fmt.Sprintf("# USER LOGIC FILE\nid = %q\nenabled = True\n", hexID)
 	if controls != nil {
 		b, _ := json.Marshal(controls)
@@ -107,9 +112,7 @@ func (im *InstanceManager) UpdateState(id string, state map[string]any) error {
 	instancesDir := filepath.Join(im.stateDir, "instances")
 	filePath := filepath.Join(instancesDir, id+".state.json")
 	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 	return os.WriteFile(filePath, data, 0644)
 }
 
@@ -117,9 +120,7 @@ func (im *InstanceManager) GetState(id string) (map[string]any, error) {
 	instancesDir := filepath.Join(im.stateDir, "instances")
 	filePath := filepath.Join(instancesDir, id+".state.json")
 	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	var state map[string]any
 	err = json.Unmarshal(data, &state)
 	return state, err
@@ -161,7 +162,6 @@ func (im *InstanceManager) loadStarlarkInstance(path string) (InstanceConfig, er
 	if err != nil { return InstanceConfig{}, err }
 
 	cfg := InstanceConfig{Enabled: true, State: stateData}
-	
 	if val, ok := globals["id"]; ok {
 		if s, ok := starlark.AsString(val); ok { cfg.ID = s }
 	}
@@ -179,7 +179,6 @@ func (im *InstanceManager) loadStarlarkInstance(path string) (InstanceConfig, er
 			json.Unmarshal(b, &cfg.Controls)
 		}
 	}
-
 	return cfg, nil
 }
 
@@ -206,7 +205,6 @@ func (im *InstanceManager) starlarkToMap(dict *starlark.Dict) map[string]any {
 	for _, k := range dict.Keys() {
 		v, _, _ := dict.Get(k)
 		key, _ := starlark.AsString(k)
-		
 		switch val := v.(type) {
 		case starlark.String: res[key] = string(val)
 		case starlark.Int: 
@@ -234,10 +232,8 @@ func (im *InstanceManager) ExecInstance(id string, funcName string, args ...any)
 	thread := &starlark.Thread{Name: "instance-exec"}
 	globals, err := starlark.ExecFile(thread, path, nil, nil)
 	if err != nil { return nil, err }
-
 	f, ok := globals[funcName]
 	if !ok { return nil, fmt.Errorf("function %s not found", funcName) }
-
 	starArgs := make(starlark.Tuple, len(args))
 	for i, a := range args {
 		switch v := a.(type) {
@@ -247,9 +243,7 @@ func (im *InstanceManager) ExecInstance(id string, funcName string, args ...any)
 		default:     starArgs[i] = starlark.String(fmt.Sprintf("%v", v))
 		}
 	}
-
 	res, err := starlark.Call(thread, f, starArgs, nil)
 	if err != nil { return nil, err }
-
 	return res.String(), nil
 }
