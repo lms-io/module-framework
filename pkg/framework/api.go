@@ -9,11 +9,14 @@ import (
 type ModuleAPI interface {
 	ModuleID() string
 	
+	// Lifecycle & State
+	SetBundleStatus(status BundleStatus)
+	GetModuleConfig() map[string]any
+
 	// Data Management
 	RegisterInstance(payload InstanceConfig) error
 	UpdateState(instanceID string, state map[string]any) error
 	GetInstances() []InstanceConfig
-	GetModuleConfig() map[string]any
 	
 	// Communication
 	Publish(topic, eventType string, data map[string]any)
@@ -24,6 +27,7 @@ type ModuleAPI interface {
 	
 	// Logging
 	Info(msg string, args ...any)
+	Warn(msg string, args ...any)
 	Error(msg string, args ...any)
 	Debug(msg string, args ...any)
 }
@@ -55,17 +59,26 @@ func (m *BaseModule) Start() error {
 
 func (m *BaseModule) ModuleID() string { return m.id }
 
+func (m *BaseModule) SetBundleStatus(status BundleStatus) {
+	m.bus.Publish("sys/bundle_status", "status", map[string]any{
+		"bundle":  m.id,
+		"state":   status.State,
+		"message": status.Message,
+		"config":  status.Config,
+	})
+}
+
 func (m *BaseModule) RegisterInstance(payload InstanceConfig) error {
-	// 1. Persist to Disk
 	if err := m.im.RegisterInstance(payload); err != nil {
 		return err
 	}
-
-	// 2. Announce to Bus (Core Registry)
 	m.bus.Publish("sys/register", "register", map[string]any{
 		"id":       payload.ID,
+		"name":     payload.Name,
+		"alias":    payload.Alias,
 		"bundle":   m.id,
 		"config":   payload.Config,
+		"state":    payload.State,
 		"controls": payload.Controls,
 		"meta":     payload.Meta,
 	})
@@ -99,5 +112,6 @@ func (m *BaseModule) Subscribe(topic string) <-chan Event {
 func (m *BaseModule) Context() context.Context { return m.ctx }
 
 func (m *BaseModule) Info(msg string, args ...any) { log.Printf("INFO  ["+m.id+"] "+msg, args...) }
+func (m *BaseModule) Warn(msg string, args ...any) { log.Printf("WARN  ["+m.id+"] "+msg, args...) }
 func (m *BaseModule) Error(msg string, args ...any) { log.Printf("ERROR ["+m.id+"] "+msg, args...) }
 func (m *BaseModule) Debug(msg string, args ...any) { log.Printf("DEBUG ["+m.id+"] "+msg, args...) }

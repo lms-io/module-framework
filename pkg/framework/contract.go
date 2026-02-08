@@ -1,5 +1,24 @@
 package framework
 
+// BundleState represents the lifecycle phase of a module.
+type BundleState string
+
+const (
+	StateIdling     BundleState = "idling"     // No config provided yet
+	StateValidating BundleState = "validating" // Checking credentials/connectivity
+	StateReady      BundleState = "ready"      // Config proven, but Init not called yet
+	StateStarting   BundleState = "starting"   // In the middle of initial discovery/sync
+	StateActive     BundleState = "active"     // Fully operational, initial sync complete
+	StateError      BundleState = "error"      // Config invalid or connection lost
+)
+
+// BundleStatus provides human-readable context for the current state.
+type BundleStatus struct {
+	State   BundleState    `json:"state"`
+	Message string         `json:"message,omitempty"`
+	Config  map[string]any `json:"config,omitempty"` // The active config
+}
+
 // ControlSpec defines a first-class interactive UI component.
 type ControlSpec struct {
 	Type     string   `json:"type"`                // REQUIRED: "switch", "sensor", "binary_sensor", "light", "number", "image", "stream"
@@ -15,6 +34,8 @@ type ControlSpec struct {
 // InstanceConfig is the standardized container for any hardware device.
 type InstanceConfig struct {
 	ID       string                 `json:"id"`       // Unique hardware identifier (e.g. MAC)
+	Name     string                 `json:"name"`     // Friendly human-readable name (from hardware)
+	Alias    string                 `json:"alias"`    // User-defined override name
 	Enabled  bool                   `json:"enabled"`  // If the logic should actively connect
 	Config   map[string]any         `json:"config"`   // Static connection info (IP, Port, Keys)
 	State    map[string]any         `json:"state"`    // Live values (Key matches Control key)

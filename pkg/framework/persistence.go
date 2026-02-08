@@ -32,11 +32,15 @@ func (im *InstanceManager) RegisterInstance(payload InstanceConfig) error {
 	dir := filepath.Join(im.stateDir, "instances")
 	os.MkdirAll(dir, 0755)
 
-	// We use Starlark (.star) for Config + Controls (Static)
-	// and JSON (.state.json) for live State (Dynamic)
-	
-	// 1. Save Static Config + Controls
-	content := fmt.Sprintf("# AUTOMATICALLY GENERATED\nid = %q\nenabled = %v\n", payload.ID, payload.Enabled)
+	enabledInt := 0
+	if payload.Enabled { enabledInt = 1 }
+
+	// 1. Prepare Content
+	content := fmt.Sprintf(`id = "%s"
+name = "%s"
+alias = "%s"
+enabled = %d
+`, payload.ID, payload.Name, payload.Alias, enabledInt)
 	
 	controlsJSON, _ := json.MarshalIndent(payload.Controls, "", "    ")
 	content += fmt.Sprintf("controls = %s\n", im.jsonToStarlark(controlsJSON))
@@ -97,38 +101,48 @@ func (im *InstanceManager) loadStarlarkInstance(path string) (InstanceConfig, er
 	globals, err := starlark.ExecFile(thread, path, nil, nil)
 	if err != nil { return InstanceConfig{}, err }
 
-	cfg := InstanceConfig{Enabled: true}
-	if val, ok := globals["id"]; ok {
-		if s, ok := starlark.AsString(val); ok { cfg.ID = s }
-	}
+	id, _ := starlark.AsString(globals["id"])
+	name, _ := starlark.AsString(globals["name"])
+	alias, _ := starlark.AsString(globals["alias"])
+	
+	enabled := false
 	if val, ok := globals["enabled"]; ok {
-		if b, ok := val.(starlark.Bool); ok { cfg.Enabled = bool(b) }
+		if i, ok := val.(starlark.Int); ok {
+			i64, _ := i.Int64()
+			enabled = i64 == 1
+		}
+	}
+	
+	inst := InstanceConfig{
+		ID:      id,
+		Name:    name,
+		Alias:   alias,
+		Enabled: enabled,
 	}
 	
 	// Load Maps
 	if val, ok := globals["config"]; ok {
-		if dict, ok := val.(*starlark.Dict); ok { cfg.Config = im.starlarkToMap(dict) }
+		if dict, ok := val.(*starlark.Dict); ok { inst.Config = im.starlarkToMap(dict) }
 	}
 	if val, ok := globals["meta"]; ok {
-		if dict, ok := val.(*starlark.Dict); ok { cfg.Meta = im.starlarkToMap(dict) }
+		if dict, ok := val.(*starlark.Dict); ok { inst.Meta = im.starlarkToMap(dict) }
 	}
 	if val, ok := globals["controls"]; ok {
 		if dict, ok := val.(*starlark.Dict); ok {
 			raw := im.starlarkToMap(dict)
-			cfg.Controls = make(map[string]ControlSpec)
-			// Efficiently convert map to typed struct
+			inst.Controls = make(map[string]ControlSpec)
 			b, _ := json.Marshal(raw)
-			json.Unmarshal(b, &cfg.Controls)
+			json.Unmarshal(b, &inst.Controls)
 		}
 	}
 
 	// Load live state from JSON if it exists
 	statePath := strings.TrimSuffix(path, ".star") + ".state.json"
 	if data, err := os.ReadFile(statePath); err == nil {
-		json.Unmarshal(data, &cfg.State)
+		json.Unmarshal(data, &inst.State)
 	}
 
-	return cfg, nil
+	return inst, nil
 }
 
 func (im *InstanceManager) starlarkToMap(dict *starlark.Dict) map[string]any {
