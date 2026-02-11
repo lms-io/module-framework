@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 )
 
@@ -66,12 +67,20 @@ func (b *BusClient) Subscribe(topic string) <-chan Event {
 	ch := make(chan Event, 100)
 	b.mu.Lock()
 	b.listeners = append(b.listeners, func(ev Event) {
-		if ev.Topic == topic {
+		if topicMatches(topic, ev.Topic) {
 			ch <- ev
 		}
 	})
 	b.mu.Unlock()
 	return ch
+}
+
+func topicMatches(subscription, topic string) bool {
+	if strings.HasSuffix(subscription, "*") {
+		prefix := strings.TrimSuffix(subscription, "*")
+		return strings.HasPrefix(topic, prefix)
+	}
+	return subscription == topic
 }
 
 func (b *BusClient) Close() {
