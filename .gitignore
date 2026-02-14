@@ -1,0 +1,10 @@
+# Go
+bin/
+*-bin
+adapter-bin
+*.log
+.env
+.env.*
+
+# OS
+.DS_Store
