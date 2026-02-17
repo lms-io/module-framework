@@ -12,18 +12,19 @@ import (
 // BusClient handles low-level communication with the system Unix socket.
 type BusClient struct {
 	socketPath string
-	moduleID   sync.Map // Using Map for atomic ID storage if needed
 	id         string
 	conn       net.Conn
-	listeners  []func(Event)
+	listeners  map[string]func(Event)
 	mu         sync.Mutex
 	done       chan struct{}
+	seq        uint64
 }
 
 func NewBusClient(path, moduleID string) *BusClient {
 	return &BusClient{
 		socketPath: path,
 		id:         moduleID,
+		listeners:  make(map[string]func(Event)),
 		done:       make(chan struct{}),
 	}
 }
@@ -63,16 +64,28 @@ func (b *BusClient) Publish(topic, eventType string, data map[string]any) {
 	b.mu.Unlock()
 }
 
-func (b *BusClient) Subscribe(topic string) <-chan Event {
+func (b *BusClient) Subscribe(topic string) (<-chan Event, string) {
 	ch := make(chan Event, 100)
 	b.mu.Lock()
-	b.listeners = append(b.listeners, func(ev Event) {
+	b.seq++
+	subID := fmt.Sprintf("%d", b.seq)
+	b.listeners[subID] = func(ev Event) {
 		if topicMatches(topic, ev.Topic) {
-			ch <- ev
+			select {
+			case ch <- ev:
+			default:
+				// Buffer full, drop event
+			}
 		}
-	})
+	}
 	b.mu.Unlock()
-	return ch
+	return ch, subID
+}
+
+func (b *BusClient) Unsubscribe(subID string) {
+	b.mu.Lock()
+	delete(b.listeners, subID)
+	b.mu.Unlock()
 }
 
 func topicMatches(subscription, topic string) bool {

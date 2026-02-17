@@ -2,6 +2,8 @@ package framework
 
 import (
 	"encoding/json"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,11 +70,42 @@ func (im *InstanceManager) DeleteInstance(id string) error {
 		filepath.Join(dir, id+".script"),
 		filepath.Join(dir, id+".script.state.json"),
 	}
+	log.Printf("[%s] DeleteInstance start id=%s dir=%s", im.moduleID, id, dir)
 	var firstErr error
 	for _, p := range paths {
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) && firstErr == nil {
-			firstErr = err
+		if err := os.Remove(p); err != nil {
+			if os.IsNotExist(err) {
+				log.Printf("[%s] DeleteInstance id=%s file missing (already absent): %s", im.moduleID, id, p)
+				continue
+			}
+			log.Printf("[%s] DeleteInstance id=%s remove failed path=%s err=%v", im.moduleID, id, p, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
+
+		// Verify the file is actually gone immediately after remove.
+		if _, err := os.Stat(p); err == nil {
+			verifyErr := fmt.Errorf("delete verification failed, file still exists: %s", p)
+			log.Printf("[%s] DeleteInstance id=%s %v", im.moduleID, id, verifyErr)
+			if firstErr == nil {
+				firstErr = verifyErr
+			}
+			continue
+		} else if !os.IsNotExist(err) {
+			log.Printf("[%s] DeleteInstance id=%s stat-after-delete failed path=%s err=%v", im.moduleID, id, p, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		log.Printf("[%s] DeleteInstance id=%s deleted path=%s", im.moduleID, id, p)
+	}
+	if firstErr != nil {
+		log.Printf("[%s] DeleteInstance done id=%s with error=%v", im.moduleID, id, firstErr)
+	} else {
+		log.Printf("[%s] DeleteInstance done id=%s success", im.moduleID, id)
 	}
 	return firstErr
 }

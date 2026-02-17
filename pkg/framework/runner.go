@@ -187,13 +187,17 @@ func Run(handler LifecycleHandler) {
 					if id == "" {
 						break
 					}
+					log.Printf("[%s] delete_instance requested id=%s", cfg.ModuleID, id)
 					if d, ok := handler.(InstanceDeleter); ok {
 						d.DeleteInstance(id)
 					}
 					if err := base.DeleteInstance(id); err != nil {
 						log.Printf("[%s] delete_instance failed: %v", cfg.ModuleID, err)
 					} else if obs, ok := handler.(InstanceLifecycleObserver); ok {
+						log.Printf("[%s] delete_instance completed id=%s", cfg.ModuleID, id)
 						obs.OnInstanceDeleted(id)
+					} else {
+						log.Printf("[%s] delete_instance completed id=%s", cfg.ModuleID, id)
 					}
 				case "bundle_api":
 					requestID := asString(ev.Data["request_id"])
@@ -205,7 +209,7 @@ func Run(handler LifecycleHandler) {
 						"action":     action,
 						"ok":         false,
 					}
-					result, err := handleBundleAPIRequest(cfg, base.modConfig, action, params)
+					result, err := handleBundleAPIRequest(cfg, cfgPath, base, handler, action, params)
 					if err != nil {
 						resp["error"] = err.Error()
 					} else {
@@ -238,14 +242,14 @@ func asBool(v any, fallback bool) bool {
 	return fallback
 }
 
-func handleBundleAPIRequest(cfg RunnerConfig, modConfig map[string]any, action string, params map[string]any) (map[string]any, error) {
+func handleBundleAPIRequest(cfg RunnerConfig, cfgPath string, base *BaseModule, handler LifecycleHandler, action string, params map[string]any) (map[string]any, error) {
 	if params == nil {
 		params = map[string]any{}
 	}
 	switch action {
 	case "get_config":
 		cfgCopy := map[string]any{}
-		for k, v := range modConfig {
+		for k, v := range base.modConfig {
 			cfgCopy[k] = v
 		}
 		return map[string]any{"config": cfgCopy}, nil
@@ -304,7 +308,180 @@ func handleBundleAPIRequest(cfg RunnerConfig, modConfig map[string]any, action s
 			return map[string]any{"manifest": string(data)}, nil
 		}
 		return map[string]any{"manifest": ""}, nil
+	case "mcp_describe":
+		desc := MCPDescriptor{
+			Instructions: []string{
+				"Use framework base tools for instances and config whenever possible.",
+			},
+			Tools: []MCPTool{
+				{
+					Name:        "instances.list",
+					Description: "List bundle instances.",
+					Mutating:    false,
+				},
+				{
+					Name:        "instances.add",
+					Description: "Create/update an instance.",
+					Mutating:    true,
+				},
+				{
+					Name:        "instances.remove",
+					Description: "Remove an instance by id.",
+					Mutating:    true,
+					InputSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"id": map[string]any{"type": "string"},
+						},
+						"required": []string{"id"},
+					},
+				},
+				{
+					Name:        "config.get",
+					Description: "Get bundle config.",
+					Mutating:    false,
+				},
+				{
+					Name:        "config.set",
+					Description: "Set and validate bundle config.",
+					Mutating:    true,
+				},
+			},
+		}
+		if p, ok := handler.(MCPProvider); ok {
+			custom := p.MCPDescribe()
+			desc.Tools = append(desc.Tools, custom.Tools...)
+			desc.Instructions = append(desc.Instructions, custom.Instructions...)
+		}
+		return map[string]any{
+			"bundle_id": cfg.ModuleID,
+			"mcp":       desc,
+		}, nil
+	case "mcp_invoke":
+		tool := strings.TrimSpace(asString(params["tool"]))
+		args, _ := params["args"].(map[string]any)
+		if args == nil {
+			args = map[string]any{}
+		}
+		switch tool {
+		case "instances.list", "devices.list":
+			return map[string]any{
+				"items": base.GetInstances(),
+				"count": len(base.GetInstances()),
+			}, nil
+		case "instances.add", "instances.update":
+			instRaw, ok := args["instance"].(map[string]any)
+			if !ok {
+				instRaw = args
+			}
+			payload, err := parseInstanceConfig(instRaw)
+			if err != nil {
+				return nil, err
+			}
+			if payload.ID == "" {
+				return nil, fmt.Errorf("missing instance id")
+			}
+			if p, ok := handler.(InstancePreprocessor); ok {
+				next, err := p.PrepareInstance(payload)
+				if err != nil {
+					return nil, err
+				}
+				payload = next
+			}
+			if err := base.RegisterInstance(payload); err != nil {
+				return nil, err
+			}
+			if obs, ok := handler.(InstanceLifecycleObserver); ok {
+				obs.OnInstanceRegistered(payload)
+			}
+			return map[string]any{"ok": true, "instance": payload}, nil
+		case "instances.remove":
+			id := strings.TrimSpace(asString(args["id"]))
+			if id == "" {
+				return nil, fmt.Errorf("missing id")
+			}
+			if d, ok := handler.(InstanceDeleter); ok {
+				d.DeleteInstance(id)
+			}
+			if err := base.DeleteInstance(id); err != nil {
+				return nil, err
+			}
+			if obs, ok := handler.(InstanceLifecycleObserver); ok {
+				obs.OnInstanceDeleted(id)
+			}
+			return map[string]any{"ok": true, "id": id}, nil
+		case "config.get":
+			cfgCopy := map[string]any{}
+			for k, v := range base.modConfig {
+				cfgCopy[k] = v
+			}
+			return map[string]any{"config": cfgCopy}, nil
+		case "config.set":
+			newCfg, _ := args["config"].(map[string]any)
+			if newCfg == nil {
+				newCfg = map[string]any{}
+			}
+			if err := handler.ValidateConfig(base.Context(), newCfg); err != nil {
+				return nil, err
+			}
+			data, _ := json.MarshalIndent(newCfg, "", "  ")
+			if err := os.WriteFile(cfgPath, data, 0644); err != nil {
+				return nil, err
+			}
+			base.modConfig = newCfg
+			base.SetBundleStatus(BundleStatus{State: StateReady, Message: "Verified", Config: newCfg})
+			return map[string]any{"ok": true, "config": newCfg}, nil
+		default:
+			if p, ok := handler.(MCPProvider); ok {
+				out, err := p.MCPInvoke(tool, args, base)
+				if err != nil {
+					return nil, err
+				}
+				if out == nil {
+					out = map[string]any{}
+				}
+				return out, nil
+			}
+			return nil, fmt.Errorf("unsupported tool: %s", tool)
+		}
 	default:
 		return nil, fmt.Errorf("unsupported action")
 	}
+}
+
+func parseInstanceConfig(raw map[string]any) (InstanceConfig, error) {
+	if raw == nil {
+		return InstanceConfig{}, fmt.Errorf("missing instance")
+	}
+	payload := InstanceConfig{
+		ID:      asString(raw["id"]),
+		Name:    asString(raw["name"]),
+		Alias:   asString(raw["alias"]),
+		Enabled: asBool(raw["enabled"], true),
+	}
+	if cfgMap, ok := raw["config"].(map[string]any); ok {
+		payload.Config = cfgMap
+	} else {
+		payload.Config = map[string]any{}
+	}
+	if meta, ok := raw["meta"].(map[string]any); ok {
+		payload.Meta = meta
+	}
+	if rawEnts, ok := raw["raw_entities"].([]any); ok {
+		data, _ := json.Marshal(rawEnts)
+		_ = json.Unmarshal(data, &payload.RawEntities)
+	}
+	if rawState, ok := raw["raw_state"].(map[string]any); ok {
+		data, _ := json.Marshal(rawState)
+		_ = json.Unmarshal(data, &payload.RawState)
+	}
+	if ents, ok := raw["entities"].([]any); ok {
+		data, _ := json.Marshal(ents)
+		_ = json.Unmarshal(data, &payload.Entities)
+	}
+	if state, ok := raw["entity_state"].(map[string]any); ok {
+		data, _ := json.Marshal(state)
+		_ = json.Unmarshal(data, &payload.EntityState)
+	}
+	return payload, nil
 }

@@ -73,6 +73,25 @@ type DeviceDiscoverer interface {
 	DiscoverDevice(config map[string]any)
 }
 
+type MCPTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Mutating    bool           `json:"mutating,omitempty"`
+	InputSchema map[string]any `json:"input_schema,omitempty"`
+}
+
+type MCPDescriptor struct {
+	Instructions []string  `json:"instructions,omitempty"`
+	Tools        []MCPTool `json:"tools,omitempty"`
+}
+
+// MCPProvider is optional. When implemented, bundles can extend framework-provided
+// MCP tools with bundle-specific tools and handlers.
+type MCPProvider interface {
+	MCPDescribe() MCPDescriptor
+	MCPInvoke(tool string, args map[string]any, api ModuleAPI) (map[string]any, error)
+}
+
 // Event represents a system-wide message on the Bus.
 type Event struct {
 	Topic string         `json:"topic"` // e.g. "commands/device-id", "state/device-id"

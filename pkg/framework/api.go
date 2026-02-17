@@ -3,6 +3,7 @@ package framework
 import (
 	"context"
 	"log"
+	"sync"
 )
 
 // ModuleAPI is the interface provided to the logic layer.
@@ -25,6 +26,8 @@ type ModuleAPI interface {
 	Listen(topic string) <-chan Event
 	// Subscribe listens to state updates for a device, or a specific entity when provided.
 	Subscribe(deviceID string, entityID ...string) <-chan Event
+	// Unsubscribe removes all listeners for a given topic.
+	Unsubscribe(topic string)
 
 	// Lifecycle
 	Context() context.Context
@@ -44,6 +47,9 @@ type BaseModule struct {
 	im        *InstanceManager
 	ctx       context.Context
 	modConfig map[string]any
+
+	mu     sync.Mutex
+	subIDs map[string][]string // topic -> subIDs
 }
 
 func NewBaseModule(ctx context.Context, id, stateDir, busSocket string, config map[string]any) *BaseModule {
@@ -54,6 +60,7 @@ func NewBaseModule(ctx context.Context, id, stateDir, busSocket string, config m
 		im:        NewInstanceManager(stateDir, id),
 		ctx:       ctx,
 		modConfig: config,
+		subIDs:    make(map[string][]string),
 	}
 }
 
@@ -130,17 +137,37 @@ func (m *BaseModule) Publish(topic, eventType string, data map[string]any) {
 }
 
 func (m *BaseModule) Listen(topic string) <-chan Event {
-	return m.bus.Subscribe(topic)
+	ch, subID := m.bus.Subscribe(topic)
+	m.mu.Lock()
+	m.subIDs[topic] = append(m.subIDs[topic], subID)
+	m.mu.Unlock()
+	return ch
 }
 
 func (m *BaseModule) Subscribe(deviceID string, entityID ...string) <-chan Event {
+	var topic string
 	if deviceID == "" {
-		return m.bus.Subscribe("")
+		topic = ""
+	} else if len(entityID) > 0 && entityID[0] != "" {
+		topic = "state/" + deviceID + "/" + entityID[0]
+	} else {
+		topic = "state/" + deviceID
 	}
-	if len(entityID) > 0 && entityID[0] != "" {
-		return m.bus.Subscribe("state/" + deviceID + "/" + entityID[0])
+	ch, subID := m.bus.Subscribe(topic)
+	m.mu.Lock()
+	m.subIDs[topic] = append(m.subIDs[topic], subID)
+	m.mu.Unlock()
+	return ch
+}
+
+func (m *BaseModule) Unsubscribe(topic string) {
+	m.mu.Lock()
+	ids := m.subIDs[topic]
+	delete(m.subIDs, topic)
+	m.mu.Unlock()
+	for _, subID := range ids {
+		m.bus.Unsubscribe(subID)
 	}
-	return m.bus.Subscribe("state/" + deviceID)
 }
 
 func (m *BaseModule) Context() context.Context { return m.ctx }
